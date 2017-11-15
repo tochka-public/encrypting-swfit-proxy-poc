@@ -1,12 +1,61 @@
 package main
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 )
+
+func encrypt(body []byte, key []byte) ([]byte, error) {
+	c, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(c)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	return gcm.Seal(nil, nonce, body, nil), nil
+}
+
+func decrypt(encryptedbody []byte, key []byte) ([]byte, error) {
+	c, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(c)
+	if err != nil {
+		return nil, err
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(encryptedbody) < nonceSize {
+		return nil, errors.New("encryptedbody too short")
+	}
+
+	nonce, encryptedbody := encryptedbody[:nonceSize], encryptedbody[nonceSize:]
+	return gcm.Open(nil, nonce, encryptedbody, nil)
+}
 
 func singleJoiningSlash(a, b string) string {
 	aslash := strings.HasSuffix(a, "/")
@@ -48,6 +97,7 @@ type storageTransport struct {
 }
 
 func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	key := []byte("AES256Key-32Characters1234567890")
 	fmt.Println("--Request--")
 	// if req.ContentLength > 0 {
 	// 	fmt.Println("================ we have a body, it's size is:", req.ContentLength)
@@ -57,22 +107,81 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		fmt.Println(err)
 	}
 	fmt.Println(string(requestDump))
+
 	// PUT, something in body and URI contains more than one slash and
 	// not a slash at the end — probably a file upload
+	// kinda same for GET
 	if req.Method == "PUT" && req.ContentLength > 0 &&
 		strings.LastIndex(req.RequestURI, "/") != 0 &&
 		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 {
-		fmt.Println("probably a file upload, we should encode")
-	} else if req.Method == "GET" &&
-		strings.LastIndex(req.RequestURI, "/") != 0 &&
-		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 {
-		fmt.Println("probably a file download, we should encode")
+		fmt.Println("probably a file upload, we should encrypt body")
+		body, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			panic(err)
+		}
+		encryptedBody, err := encrypt(body, key)
+		if err != nil {
+			panic(err)
+		}
+		req.Body = ioutil.NopCloser(bytes.NewReader(encryptedBody))
+		req.ContentLength = int64(len(encryptedBody))
+	}
+	requestedRange := req.Header.Get("Range")
+	if req.Method == "GET" && strings.LastIndex(req.RequestURI, "/") != 0 &&
+		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 &&
+		requestedRange != "" {
+		req.Header.Del("Range")
 	}
 	fmt.Println("----Response----")
 	resp, err := http.DefaultTransport.RoundTrip(req)
-	if resp.ContentLength > 0 {
-		fmt.Println("================ we have a body, it's size is:", resp.ContentLength)
+	if req.Method == "GET" && resp.ContentLength > 0 &&
+		strings.LastIndex(req.RequestURI, "/") != 0 &&
+		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 {
+		fmt.Println("probably a file download, we should decrypt body")
+		body, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			panic(err)
+		}
+		decryptedBody, err := decrypt(body, key)
+		if err != nil {
+			panic(err)
+		}
+		if requestedRange != "" {
+			var from, to int64
+			ranges := strings.Split(requestedRange, "-")
+			if ranges[0] != "" {
+				from, err := strconv.Atoi(ranges[0])
+				if err != nil {
+					panic(err)
+				}
+				from = from + 1
+			} else {
+				from = 0
+			}
+			if ranges[1] != "" {
+				to, err := strconv.Atoi(ranges[1])
+				if err != nil {
+					panic(err)
+				}
+				to = to + 1
+			} else {
+				to = 0
+			}
+
+			decryptedBody = decryptedBody[from:to]
+		}
+		//fmt.Println(decryptedBody)
+		resp.Body = ioutil.NopCloser(bytes.NewReader(decryptedBody))
+		resp.ContentLength = int64(len(decryptedBody))
+		hasher := md5.New()
+		hasher.Write(decryptedBody)
+		//fmt.Println(hex.EncodeToString(hasher.Sum(nil)))
+		resp.Header.Set("Etag", hex.EncodeToString(hasher.Sum(nil)))
 	}
+	// if resp.ContentLength > 0 {
+	// 	fmt.Println("================ we have a body, it's size is:", resp.ContentLength)
+	// }
 	responseDump, err := httputil.DumpResponse(resp, false)
 	if err != nil {
 		fmt.Println(err)
