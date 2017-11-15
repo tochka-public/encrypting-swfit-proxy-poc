@@ -73,22 +73,22 @@ type authTransport struct {
 }
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	fmt.Println("--Request--")
-	requestDump, err := httputil.DumpRequest(req, true)
-	if err != nil {
-		fmt.Println(err)
-	}
-	fmt.Println(string(requestDump))
-	fmt.Println("----Response----")
+	// fmt.Println("--Request--")
+	// requestDump, err := httputil.DumpRequest(req, true)
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// fmt.Println(string(requestDump))
+	// fmt.Println("----Response----")
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if resp.Header.Get("X-Storage-Url") == "https://134225.selcdn.ru/" {
 		resp.Header.Set("X-Storage-Url", "http://localhost:9091")
 	}
-	responseDump, err := httputil.DumpResponse(resp, true)
-	if err != nil {
-		fmt.Println(err)
-	}
-	fmt.Println(string(responseDump))
+	// responseDump, err := httputil.DumpResponse(resp, true)
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// fmt.Println(string(responseDump))
 
 	return resp, err
 }
@@ -98,15 +98,15 @@ type storageTransport struct {
 
 func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	key := []byte("AES256Key-32Characters1234567890")
-	fmt.Println("--Request--")
+	// fmt.Println("--Request--")
 	// if req.ContentLength > 0 {
 	// 	fmt.Println("================ we have a body, it's size is:", req.ContentLength)
 	// }
-	requestDump, err := httputil.DumpRequest(req, false)
-	if err != nil {
-		fmt.Println(err)
-	}
-	fmt.Println(string(requestDump))
+	// requestDump, err := httputil.DumpRequest(req, false)
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// fmt.Println(string(requestDump))
 
 	// PUT, something in body and URI contains more than one slash and
 	// not a slash at the end — probably a file upload
@@ -115,7 +115,8 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if req.Method == "PUT" && req.ContentLength > 0 &&
 		strings.LastIndex(req.RequestURI, "/") != 0 &&
 		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 {
-		fmt.Println("probably a file upload, we should encrypt body")
+		// fmt.Println("probably a file upload, we should encrypt body")
+		fmt.Println("encrypted upload:", req.RequestURI)
 		body, err := ioutil.ReadAll(req.Body)
 		if err != nil {
 			panic(err)
@@ -143,25 +144,25 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		requestedRange != "" {
 		req.Header.Del("Range")
 	}
-	fmt.Println("----Response----")
+	// fmt.Println("----Response----")
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if req.Method == "PUT" && resp.StatusCode == 201 &&
 		strings.LastIndex(req.RequestURI, "/") != 0 &&
 		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 &&
 		encryptedEtag == resp.Header.Get("Etag") {
 		resp.Header.Set("Etag", originalEtag)
-
 	}
 	if req.Method == "GET" && resp.ContentLength > 0 &&
 		resp.StatusCode >= 200 && resp.StatusCode < 300 &&
 		strings.LastIndex(req.RequestURI, "/") != 0 &&
 		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 {
-		fmt.Println("probably a file download, we should decrypt body")
+		// fmt.Println("probably a file download, we should decrypt body")
+		fmt.Println("encrypted download:", req.RequestURI)
 		body, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
 		if err != nil {
 			panic(err)
 		}
+		resp.Body.Close()
 		decryptedBody, err := decrypt(body, key)
 		if err != nil {
 			panic(err)
@@ -183,7 +184,6 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 				from = 0
 			}
 			if ranges[1] != "" {
-				fmt.Println("ranges 1!", ranges[1])
 				to, err = strconv.Atoi(ranges[1])
 				if err != nil {
 					panic(err)
@@ -214,12 +214,12 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		//fmt.Println(hex.EncodeToString(hasher.Sum(nil)))
 
 	}
-	responseDump, err := httputil.DumpResponse(resp, false)
-	if err != nil {
-		fmt.Println(err)
-	}
+	// responseDump, err := httputil.DumpResponse(resp, false)
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
 
-	fmt.Println(string(responseDump))
+	// fmt.Println(string(responseDump))
 
 	resp.Header.Set("X-Encrypting-Proxy", "yup")
 	return resp, err
