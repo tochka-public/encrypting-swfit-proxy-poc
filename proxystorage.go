@@ -125,8 +125,12 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 		req.Body = ioutil.NopCloser(bytes.NewReader(encryptedBody))
 		req.ContentLength = int64(len(encryptedBody))
+		req.Header.Set("Content-Length", strconv.Itoa(len(encryptedBody)))
 	}
 	requestedRange := req.Header.Get("Range")
+	if requestedRange != "" {
+		requestedRange = strings.Split(requestedRange, "=")[1] // assume bytes
+	}
 	if req.Method == "GET" && strings.LastIndex(req.RequestURI, "/") != 0 &&
 		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 &&
 		requestedRange != "" {
@@ -147,41 +151,54 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		if err != nil {
 			panic(err)
 		}
+		decryptedBodyLen := len(decryptedBody)
+		hasher := md5.New()
+		hasher.Write(decryptedBody)
+		etagString := hex.EncodeToString(hasher.Sum(nil))
 		if requestedRange != "" {
-			var from, to int64
 			ranges := strings.Split(requestedRange, "-")
+			var from, to int
 			if ranges[0] != "" {
-				from, err := strconv.Atoi(ranges[0])
+				from, err = strconv.Atoi(ranges[0])
 				if err != nil {
 					panic(err)
 				}
-				from = from + 1
+				from = from - 1
 			} else {
 				from = 0
 			}
 			if ranges[1] != "" {
-				to, err := strconv.Atoi(ranges[1])
+				fmt.Println("ranges 1!", ranges[1])
+				to, err = strconv.Atoi(ranges[1])
 				if err != nil {
 					panic(err)
 				}
-				to = to + 1
+				to = to - 1
 			} else {
-				to = 0
+				to = decryptedBodyLen - 1
 			}
-
 			decryptedBody = decryptedBody[from:to]
+			resp.Header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", from+1, to+1, decryptedBodyLen))
+			resp.StatusCode = 206
+			resp.Status = "Partial Content"
 		}
+		if req.Header.Get("If-Match") != "" &&
+			req.Header.Get("If-Match") != etagString {
+			resp.StatusCode = 416
+			resp.Status = "Range Not Satisfiable"
+			resp.Body = ioutil.NopCloser(strings.NewReader(""))
+		} else {
+			resp.Header.Set("Etag", etagString)
+		}
+		decryptedBodyLen = len(decryptedBody)
 		//fmt.Println(decryptedBody)
 		resp.Body = ioutil.NopCloser(bytes.NewReader(decryptedBody))
-		resp.ContentLength = int64(len(decryptedBody))
-		hasher := md5.New()
-		hasher.Write(decryptedBody)
+		resp.ContentLength = int64(decryptedBodyLen)
+		resp.Header.Set("Content-Length", strconv.Itoa(decryptedBodyLen))
+		//		resp.ContentLength = int64(decryptedBodyLen)
 		//fmt.Println(hex.EncodeToString(hasher.Sum(nil)))
-		resp.Header.Set("Etag", hex.EncodeToString(hasher.Sum(nil)))
+
 	}
-	// if resp.ContentLength > 0 {
-	// 	fmt.Println("================ we have a body, it's size is:", resp.ContentLength)
-	// }
 	responseDump, err := httputil.DumpResponse(resp, false)
 	if err != nil {
 		fmt.Println(err)
@@ -189,6 +206,7 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 	fmt.Println(string(responseDump))
 
+	resp.Header.Set("X-Encrypting-Proxy", "yup")
 	return resp, err
 }
 
