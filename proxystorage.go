@@ -73,22 +73,22 @@ type authTransport struct {
 }
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// fmt.Println("--Request--")
-	// requestDump, err := httputil.DumpRequest(req, true)
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
-	// fmt.Println(string(requestDump))
-	// fmt.Println("----Response----")
+	fmt.Println("--Request--")
+	requestDump, err := httputil.DumpRequest(req, true)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(string(requestDump))
+	fmt.Println("----Response----")
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if resp.Header.Get("X-Storage-Url") == "https://134225.selcdn.ru/" {
 		resp.Header.Set("X-Storage-Url", "http://localhost:9091")
 	}
-	// responseDump, err := httputil.DumpResponse(resp, true)
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
-	// fmt.Println(string(responseDump))
+	responseDump, err := httputil.DumpResponse(resp, true)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(string(responseDump))
 
 	return resp, err
 }
@@ -111,6 +111,7 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	// PUT, something in body and URI contains more than one slash and
 	// not a slash at the end — probably a file upload
 	// kinda same for GET
+	var originalEtag, encryptedEtag string
 	if req.Method == "PUT" && req.ContentLength > 0 &&
 		strings.LastIndex(req.RequestURI, "/") != 0 &&
 		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 {
@@ -119,10 +120,16 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		if err != nil {
 			panic(err)
 		}
+		hasher := md5.New()
+		hasher.Write(body)
+		originalEtag = hex.EncodeToString(hasher.Sum(nil))
 		encryptedBody, err := encrypt(body, key)
 		if err != nil {
 			panic(err)
 		}
+		hasher = md5.New()
+		hasher.Write(encryptedBody)
+		encryptedEtag = hex.EncodeToString(hasher.Sum(nil))
 		req.Body = ioutil.NopCloser(bytes.NewReader(encryptedBody))
 		req.ContentLength = int64(len(encryptedBody))
 		req.Header.Set("Content-Length", strconv.Itoa(len(encryptedBody)))
@@ -138,7 +145,15 @@ func (t *storageTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	fmt.Println("----Response----")
 	resp, err := http.DefaultTransport.RoundTrip(req)
+	if req.Method == "PUT" && resp.StatusCode == 201 &&
+		strings.LastIndex(req.RequestURI, "/") != 0 &&
+		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 &&
+		encryptedEtag == resp.Header.Get("Etag") {
+		resp.Header.Set("Etag", originalEtag)
+
+	}
 	if req.Method == "GET" && resp.ContentLength > 0 &&
+		resp.StatusCode >= 200 && resp.StatusCode < 300 &&
 		strings.LastIndex(req.RequestURI, "/") != 0 &&
 		strings.LastIndex(req.RequestURI, "/") < len(req.RequestURI)-1 {
 		fmt.Println("probably a file download, we should decrypt body")
