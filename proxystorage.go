@@ -34,7 +34,7 @@ func encrypt(body []byte, key []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return gcm.Seal(nil, nonce, body, nil), nil
+	return gcm.Seal(nonce, nonce, body, nil), nil
 }
 
 func decrypt(encryptedbody []byte, key []byte) ([]byte, error) {
